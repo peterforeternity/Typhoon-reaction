@@ -54,15 +54,15 @@ function normalizeRules(raw: Partial<AlertRules> | undefined): AlertRules {
   return {
     recipients,
     minWindEnabled: raw?.minWindEnabled ?? true,
-    minWindKmh: numberOr(raw?.minWindKmh, 118),
+    minWindKmh: numberOr(raw?.minWindKmh, 63),
     categoryEnabled: raw?.categoryEnabled ?? true,
-    categoryRank: numberOr(raw?.categoryRank, 4),
+    categoryRank: numberOr(raw?.categoryRank, 2),
     proximityEnabled: raw?.proximityEnabled ?? true,
     watchLatitude: numberOr(raw?.watchLatitude, 22.3),
     watchLongitude: numberOr(raw?.watchLongitude, 114.2),
-    radiusKm: numberOr(raw?.radiusKm, 450),
+    radiusKm: numberOr(raw?.radiusKm, 600),
     rapidIntensityEnabled: raw?.rapidIntensityEnabled ?? true,
-    trendKmh: numberOr(raw?.trendKmh, 25),
+    trendKmh: numberOr(raw?.trendKmh, 20),
   };
 }
 
@@ -88,9 +88,14 @@ async function deliverAlert(
   const text = matches
     .map(
       (match) =>
-        `${match.typhoonName}\n风速：${match.currentWindKmh} km/h\n距离：${
-          match.distanceKm ?? "未计算"
-        } km\n${match.reasons.join("\n")}`,
+        `${match.warningLevel}｜${match.typhoonName}\n` +
+        `当前风速：${match.currentWindKmh} km/h\n` +
+        `预报峰值：${match.forecastPeakWindKmh} km/h\n` +
+        `距关注点：${match.distanceKm ?? "未计算"} km\n` +
+        `预计影响：${formatWindow(match.expectedImpactStart, match.expectedImpactEnd)}\n` +
+        `影响区域：${match.impactRegions.join("、") || "暂无已识别重点陆地区域"}\n\n` +
+        `触发原因：\n${match.reasons.map((reason) => `- ${reason}`).join("\n")}\n\n` +
+        `防御建议：\n${match.recommendations.map((item) => `- ${item}`).join("\n")}`,
     )
     .join("\n\n");
   const html = buildEmailHtml(matches);
@@ -160,13 +165,29 @@ async function deliverAlert(
 function buildEmailHtml(matches: AlertMatch[]): string {
   const rows = matches
     .map(
-      (match) => `<section style="margin:0 0 18px;padding:16px;border:1px solid #d9e2ec;border-radius:8px">
-  <h2 style="margin:0 0 10px;font-size:18px;color:#0f2f44">${escapeHtml(match.typhoonName)}</h2>
-  <p style="margin:0 0 8px">当前风速：<strong>${match.currentWindKmh} km/h</strong></p>
-  <p style="margin:0 0 8px">距关注点：<strong>${match.distanceKm ?? "未计算"} km</strong></p>
-  <ul style="margin:8px 0 0;padding-left:20px">${match.reasons
+      (match) => `<section style="margin:0 0 18px;border:1px solid #d7e1de;border-radius:8px;overflow:hidden">
+  <div style="padding:14px 16px;background:#17313b;color:#fff">
+    <p style="margin:0 0 4px;font-size:12px;opacity:.8">${escapeHtml(match.warningLevel)}</p>
+    <h2 style="margin:0;font-size:20px">${escapeHtml(match.typhoonName)}</h2>
+  </div>
+  <div style="padding:16px">
+    <table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:14px">
+      <tr><td style="padding:6px 0;color:#60706c">当前风速</td><td style="padding:6px 0;text-align:right;font-weight:700">${match.currentWindKmh} km/h</td></tr>
+      <tr><td style="padding:6px 0;color:#60706c">预报峰值</td><td style="padding:6px 0;text-align:right;font-weight:700">${match.forecastPeakWindKmh} km/h</td></tr>
+      <tr><td style="padding:6px 0;color:#60706c">距关注点</td><td style="padding:6px 0;text-align:right;font-weight:700">${match.distanceKm ?? "未计算"} km</td></tr>
+      <tr><td style="padding:6px 0;color:#60706c">预计影响</td><td style="padding:6px 0;text-align:right;font-weight:700">${escapeHtml(formatWindow(match.expectedImpactStart, match.expectedImpactEnd))}</td></tr>
+    </table>
+    <h3 style="margin:0 0 7px;font-size:14px;color:#17313b">影响区域</h3>
+    <p style="margin:0 0 14px;line-height:1.6">${escapeHtml(match.impactRegions.join("、") || "暂无已识别重点陆地区域")}</p>
+    <h3 style="margin:0 0 7px;font-size:14px;color:#17313b">触发原因</h3>
+    <ul style="margin:0 0 14px;padding-left:20px">${match.reasons
     .map((reason) => `<li>${escapeHtml(reason)}</li>`)
     .join("")}</ul>
+    <h3 style="margin:0 0 7px;font-size:14px;color:#17313b">建议措施</h3>
+    <ul style="margin:0;padding-left:20px">${match.recommendations
+    .map((item) => `<li>${escapeHtml(item)}</li>`)
+    .join("")}</ul>
+  </div>
 </section>`,
     )
     .join("");
@@ -174,8 +195,24 @@ function buildEmailHtml(matches: AlertMatch[]): string {
   return `<main style="font-family:Arial,'Microsoft YaHei',sans-serif;color:#22313f">
   <h1 style="font-size:22px;color:#0f2f44">台风监测预警</h1>
   ${rows}
-  <p style="font-size:12px;color:#607080">由台风监测与预警平台自动生成。</p>
+  <p style="font-size:12px;line-height:1.5;color:#607080">由台风监测与预警平台自动生成。影响区域为风险筛查结果，请以当地气象部门正式预警为准。</p>
 </main>`;
+}
+
+function formatWindow(start: string | null, end: string | null): string {
+  if (!start || !end) {
+    return "暂无明确影响时间窗";
+  }
+
+  const formatter = new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Shanghai",
+  });
+  return `${formatter.format(new Date(start))} 至 ${formatter.format(new Date(end))}`;
 }
 
 function emailProviderName(): string {

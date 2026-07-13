@@ -31,7 +31,7 @@ test("server-renders the typhoon monitoring shell", async () => {
   const html = await response.text();
   assert.match(html, /<title>台风监测与预警平台<\/title>/i);
   assert.match(html, /台风监测与预警平台/);
-  assert.match(html, /实时气象业务台/);
+  assert.match(html, /官方路径、区域实况、影响筛查与 120 小时强度预测/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 

@@ -24,6 +24,51 @@ export interface TyphoonMetrics {
   riskLevel: "low" | "moderate" | "high" | "extreme";
 }
 
+export interface WindForecastPoint {
+  timestamp: string;
+  horizonHours: number;
+  period: "current" | "short" | "medium";
+  windKmh: number;
+  lowerKmh: number;
+  upperKmh: number;
+  categoryLabel: string;
+}
+
+export interface ImpactRegion {
+  id: string;
+  name: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+  riskLevel: "watch" | "elevated" | "high" | "severe";
+  closestDistanceKm: number;
+  forecastWindKmh: number;
+  impactRadiusKm: number;
+  uncertaintyRadiusKm: number;
+  eta: string;
+  windowStart: string;
+  windowEnd: string;
+  confidence: "高" | "中" | "低";
+}
+
+export interface RegionalWindObservation {
+  station: string;
+  observedAt: string;
+  direction: string;
+  meanWindKmh: number | null;
+  gustKmh: number | null;
+}
+
+export interface DataFeedStatus {
+  id: string;
+  name: string;
+  cadence: string;
+  role: string;
+  url: string;
+  status: "live" | "reference" | "degraded";
+  recordCount: number;
+}
+
 export interface TyphoonSystem {
   id: string;
   name: string;
@@ -34,6 +79,8 @@ export interface TyphoonSystem {
   points: TyphoonPoint[];
   latest: TyphoonPoint;
   metrics: TyphoonMetrics;
+  windForecast: WindForecastPoint[];
+  impactRegions: ImpactRegion[];
 }
 
 export interface TyphoonDashboard {
@@ -44,6 +91,8 @@ export interface TyphoonDashboard {
     status: "live" | "fallback";
     message: string;
   };
+  sources: DataFeedStatus[];
+  regionalWinds: RegionalWindObservation[];
   typhoons: TyphoonSystem[];
 }
 
@@ -66,46 +115,103 @@ export interface AlertMatch {
   typhoonName: string;
   severity: TyphoonMetrics["riskLevel"];
   currentWindKmh: number;
+  forecastPeakWindKmh: number;
   distanceKm: number | null;
+  warningLevel: string;
+  expectedImpactStart: string | null;
+  expectedImpactEnd: string | null;
+  impactRegions: string[];
+  recommendations: string[];
   reasons: string[];
 }
 
 const HKO_LIST_URL = "https://www.weather.gov.hk/wxinfo/currwx/tc_list.xml";
+const HKO_REGIONAL_WIND_URL =
+  "https://data.weather.gov.hk/weatherAPI/hko_data/regional-weather/latest_10min_wind.csv";
+const NOAA_IBTRACS_URL =
+  "https://www.ncei.noaa.gov/products/international-best-track-archive";
 const DEFAULT_SOURCE_NAME = "香港天文台热带气旋路径开放数据";
+
+const IMPACT_LOCATIONS = [
+  ["hong-kong", "香港", "中国", 22.3193, 114.1694],
+  ["macao", "澳门", "中国", 22.1987, 113.5439],
+  ["shenzhen", "深圳", "中国", 22.5431, 114.0579],
+  ["zhuhai", "珠海", "中国", 22.271, 113.5767],
+  ["guangzhou", "广州", "中国", 23.1291, 113.2644],
+  ["shantou", "汕头", "中国", 23.3541, 116.682],
+  ["xiamen", "厦门", "中国", 24.4798, 118.0894],
+  ["fuzhou", "福州", "中国", 26.0745, 119.2965],
+  ["wenzhou", "温州", "中国", 27.9949, 120.6994],
+  ["ningbo", "宁波", "中国", 29.8683, 121.544],
+  ["shanghai", "上海", "中国", 31.2304, 121.4737],
+  ["haikou", "海口", "中国", 20.044, 110.1999],
+  ["sanya", "三亚", "中国", 18.2528, 109.5119],
+  ["zhanjiang", "湛江", "中国", 21.2707, 110.3594],
+  ["taipei", "台北", "中国台湾", 25.033, 121.5654],
+  ["kaohsiung", "高雄", "中国台湾", 22.6273, 120.3014],
+  ["manila", "马尼拉", "菲律宾", 14.5995, 120.9842],
+  ["laoag", "拉瓦格", "菲律宾", 18.196, 120.5927],
+  ["okinawa", "冲绳本岛", "日本", 26.3344, 127.8056],
+] as const;
 
 export async function getTyphoonDashboard(): Promise<TyphoonDashboard> {
   const fetchedAt = new Date().toISOString();
+  const [trackResult, windResult] = await Promise.allSettled([
+    fetchHkoTyphoons(),
+    fetchRegionalWinds(),
+  ]);
+  const trackLive = trackResult.status === "fulfilled";
+  const typhoons = trackLive ? trackResult.value : [sampleTyphoon()];
+  const regionalWinds =
+    windResult.status === "fulfilled" ? windResult.value : [];
 
-  try {
-    const typhoons = await fetchHkoTyphoons();
-    return {
-      source: {
-        name: DEFAULT_SOURCE_NAME,
+  return {
+    source: {
+      name: DEFAULT_SOURCE_NAME,
+      url: HKO_LIST_URL,
+      fetchedAt,
+      status: trackLive ? "live" : "fallback",
+      message: trackLive
+        ? typhoons.length > 0
+          ? "官方路径与区域风场已完成同步"
+          : "官方列表当前未发布活跃热带气旋路径"
+        : "实时路径暂不可用，已切换到演示样本",
+    },
+    sources: [
+      {
+        id: "hko-track",
+        name: "香港天文台路径预报",
+        cadence: "发布即更新",
+        role: "路径、中心风速与强度预报",
         url: HKO_LIST_URL,
-        fetchedAt,
-        status: "live",
-        message:
-          typhoons.length > 0
-            ? "已连接官方实时路径数据"
-            : "官方列表当前未发布活跃热带气旋路径",
+        status: trackLive ? "live" : "degraded",
+        recordCount: typhoons.reduce(
+          (total, typhoon) => total + typhoon.points.length,
+          0,
+        ),
       },
-      typhoons,
-    };
-  } catch (error) {
-    return {
-      source: {
-        name: DEFAULT_SOURCE_NAME,
-        url: HKO_LIST_URL,
-        fetchedAt,
-        status: "fallback",
-        message:
-          error instanceof Error
-            ? `实时数据暂不可用，已切换到演示样本：${error.message}`
-            : "实时数据暂不可用，已切换到演示样本",
+      {
+        id: "hko-wind",
+        name: "香港区域自动气象站",
+        cadence: "每 10 分钟",
+        role: "地面平均风与阵风验证",
+        url: HKO_REGIONAL_WIND_URL,
+        status: windResult.status === "fulfilled" ? "live" : "degraded",
+        recordCount: regionalWinds.length,
       },
-      typhoons: [sampleTyphoon()],
-    };
-  }
+      {
+        id: "noaa-ibtracs",
+        name: "NOAA IBTrACS 历史档案",
+        cadence: "历史基线",
+        role: "历史路径与强度方法参考",
+        url: NOAA_IBTRACS_URL,
+        status: "reference",
+        recordCount: 0,
+      },
+    ],
+    regionalWinds,
+    typhoons,
+  };
 }
 
 export function evaluateAlertRules(
@@ -164,17 +270,78 @@ export function evaluateAlertRules(
       return [];
     }
 
+    const affected = typhoon.impactRegions.slice(0, 6);
+    const expectedImpactStart = affected.length
+      ? affected.reduce((earliest, region) =>
+          new Date(region.windowStart).getTime() < new Date(earliest).getTime()
+            ? region.windowStart
+            : earliest,
+        affected[0].windowStart)
+      : null;
+    const expectedImpactEnd = affected.length
+      ? affected.reduce((latest, region) =>
+          new Date(region.windowEnd).getTime() > new Date(latest).getTime()
+            ? region.windowEnd
+            : latest,
+        affected[0].windowEnd)
+      : null;
+
     return [
       {
         typhoonId: typhoon.id,
         typhoonName: typhoon.name,
         severity: typhoon.metrics.riskLevel,
         currentWindKmh: typhoon.metrics.currentWindKmh,
+        forecastPeakWindKmh: typhoon.metrics.peakForecastWindKmh,
         distanceKm: distance === null ? null : Math.round(distance),
+        warningLevel: warningLevel(typhoon.metrics.riskLevel),
+        expectedImpactStart,
+        expectedImpactEnd,
+        impactRegions: affected.map(
+          (region) => `${region.name}（${impactRiskLabel(region.riskLevel)}）`,
+        ),
+        recommendations: alertRecommendations(typhoon.metrics.riskLevel),
         reasons,
       },
     ];
   });
+}
+
+function warningLevel(level: TyphoonMetrics["riskLevel"]): string {
+  return {
+    low: "蓝色关注",
+    moderate: "黄色预警",
+    high: "橙色预警",
+    extreme: "红色预警",
+  }[level];
+}
+
+function impactRiskLabel(level: ImpactRegion["riskLevel"]): string {
+  return {
+    watch: "关注",
+    elevated: "较高",
+    high: "高",
+    severe: "严重",
+  }[level];
+}
+
+function alertRecommendations(
+  level: TyphoonMetrics["riskLevel"],
+): string[] {
+  const common = [
+    "持续关注当地气象部门发布的最新预警和防御指引",
+    "检查门窗、排水与户外悬挂物，准备照明和通信备用电源",
+  ];
+
+  if (level === "high" || level === "extreme") {
+    return [
+      ...common,
+      "暂停海上、高空及临水作业，船只尽快进入安全水域避风",
+      "提前规划避险路线，按属地要求做好转移准备",
+    ];
+  }
+
+  return [...common, "调整非必要户外活动并留意交通服务变化"];
 }
 
 async function fetchHkoTyphoons(): Promise<TyphoonSystem[]> {
@@ -217,11 +384,39 @@ async function fetchHkoTyphoons(): Promise<TyphoonSystem[]> {
   return systems.filter((system): system is TyphoonSystem => Boolean(system));
 }
 
-async function fetchText(url: string): Promise<string> {
+async function fetchRegionalWinds(): Promise<RegionalWindObservation[]> {
+  const csv = await fetchText(HKO_REGIONAL_WIND_URL, "text/csv,*/*");
+  const rows = csv.trim().split(/\r?\n/).slice(1);
+
+  return rows.flatMap((row) => {
+    const [rawTime, station, direction, meanWind, gust] = row
+      .split(",")
+      .map((value) => value.trim());
+
+    if (!rawTime || !station) {
+      return [];
+    }
+
+    return [
+      {
+        station,
+        observedAt: compactTimestamp(rawTime),
+        direction: direction || "N/A",
+        meanWindKmh: csvWindValue(meanWind),
+        gustKmh: csvWindValue(gust),
+      },
+    ];
+  });
+}
+
+async function fetchText(
+  url: string,
+  accept = "application/xml,text/xml,*/*",
+): Promise<string> {
   const response = await fetch(url, {
     cache: "no-store",
     headers: {
-      accept: "application/xml,text/xml,*/*",
+      accept,
       "user-agent": "Typhoon-Monitoring-Platform/1.0",
     },
   });
@@ -282,7 +477,188 @@ function parseHkoTrack(
     points,
     latest,
     metrics: buildMetrics(observed, forecast, latest),
+    windForecast: buildWindForecast(latest, forecast),
+    impactRegions: buildImpactRegions(latest, forecast),
   };
+}
+
+function buildWindForecast(
+  latest: TyphoonPoint,
+  forecast: TyphoonPoint[],
+): WindForecastPoint[] {
+  const baseTime = latest.timestamp
+    ? new Date(latest.timestamp).getTime()
+    : Date.now();
+  const candidates = [latest, ...forecast]
+    .filter((point) => point.timestamp)
+    .filter(
+      (point, index, values) =>
+        values.findIndex((other) => other.timestamp === point.timestamp) ===
+        index,
+    );
+
+  return candidates.map((point) => {
+    const horizonHours = Math.max(
+      0,
+      Math.round(
+        (new Date(point.timestamp ?? baseTime).getTime() - baseTime) / 3_600_000,
+      ),
+    );
+    const spread = Math.min(34, 6 + horizonHours * 0.22);
+
+    return {
+      timestamp: point.timestamp ?? new Date(baseTime).toISOString(),
+      horizonHours,
+      period:
+        horizonHours === 0
+          ? "current"
+          : horizonHours <= 24
+            ? "short"
+            : "medium",
+      windKmh: point.maxWindKmh,
+      lowerKmh: Math.max(0, Math.round(point.maxWindKmh - spread)),
+      upperKmh: Math.round(point.maxWindKmh + spread),
+      categoryLabel: point.categoryLabel,
+    };
+  });
+}
+
+function buildImpactRegions(
+  latest: TyphoonPoint,
+  forecast: TyphoonPoint[],
+): ImpactRegion[] {
+  const baseTime = latest.timestamp
+    ? new Date(latest.timestamp).getTime()
+    : Date.now();
+  const track = [latest, ...forecast].filter((point) => point.timestamp);
+
+  return IMPACT_LOCATIONS.flatMap(
+    ([id, name, country, latitude, longitude]) => {
+      const closest = track
+        .map((point) => {
+          const horizonHours = Math.max(
+            0,
+            Math.round(
+              (new Date(point.timestamp ?? baseTime).getTime() - baseTime) /
+                3_600_000,
+            ),
+          );
+          const impactRadiusKm = windImpactRadius(point.maxWindKmh);
+          const uncertaintyRadiusKm = trackUncertaintyRadius(horizonHours);
+          const closestDistanceKm = Math.round(
+            distanceKm(
+              latitude,
+              longitude,
+              point.latitude,
+              point.longitude,
+            ),
+          );
+
+          return {
+            point,
+            horizonHours,
+            impactRadiusKm,
+            uncertaintyRadiusKm,
+            closestDistanceKm,
+            marginKm:
+              impactRadiusKm + uncertaintyRadiusKm - closestDistanceKm,
+          };
+        })
+        .sort((a, b) => b.marginKm - a.marginKm)[0];
+
+      if (!closest || closest.marginKm < 0) {
+        return [];
+      }
+
+      const etaTime = new Date(closest.point.timestamp ?? baseTime);
+      const windowHalfHours = closest.horizonHours <= 24 ? 6 : 12;
+      const riskLevel = impactRiskLevel(
+        closest.point.maxWindKmh,
+        closest.closestDistanceKm,
+        closest.impactRadiusKm,
+      );
+
+      return [
+        {
+          id,
+          name,
+          country,
+          latitude,
+          longitude,
+          riskLevel,
+          closestDistanceKm: closest.closestDistanceKm,
+          forecastWindKmh: closest.point.maxWindKmh,
+          impactRadiusKm: closest.impactRadiusKm,
+          uncertaintyRadiusKm: closest.uncertaintyRadiusKm,
+          eta: etaTime.toISOString(),
+          windowStart: new Date(
+            etaTime.getTime() - windowHalfHours * 3_600_000,
+          ).toISOString(),
+          windowEnd: new Date(
+            etaTime.getTime() + windowHalfHours * 3_600_000,
+          ).toISOString(),
+          confidence:
+            closest.horizonHours <= 24
+              ? "高"
+              : closest.horizonHours <= 72
+                ? "中"
+                : "低",
+        },
+      ];
+    },
+  )
+    .sort((a, b) => {
+      const riskOrder = { severe: 4, high: 3, elevated: 2, watch: 1 };
+      return riskOrder[b.riskLevel] - riskOrder[a.riskLevel] ||
+        new Date(a.eta).getTime() - new Date(b.eta).getTime();
+    })
+    .slice(0, 12);
+}
+
+function windImpactRadius(windKmh: number): number {
+  if (windKmh >= 185) return 420;
+  if (windKmh >= 150) return 360;
+  if (windKmh >= 118) return 300;
+  if (windKmh >= 88) return 240;
+  if (windKmh >= 63) return 180;
+  return 120;
+}
+
+function trackUncertaintyRadius(horizonHours: number): number {
+  const anchors = [
+    [0, 15],
+    [24, 100],
+    [48, 170],
+    [72, 255],
+    [96, 345],
+    [120, 465],
+  ] as const;
+
+  for (let index = 1; index < anchors.length; index += 1) {
+    const [endHour, endRadius] = anchors[index];
+    const [startHour, startRadius] = anchors[index - 1];
+
+    if (horizonHours <= endHour) {
+      const progress = (horizonHours - startHour) / (endHour - startHour);
+      return Math.round(startRadius + (endRadius - startRadius) * progress);
+    }
+  }
+
+  return 465;
+}
+
+function impactRiskLevel(
+  windKmh: number,
+  distance: number,
+  radius: number,
+): ImpactRegion["riskLevel"] {
+  const proximity = Math.max(0, 1 - distance / Math.max(radius, 1));
+  const score = windKmh * 0.55 + proximity * 80;
+
+  if (score >= 150) return "severe";
+  if (score >= 115) return "high";
+  if (score >= 80) return "elevated";
+  return "watch";
 }
 
 function isTyphoonPoint(point: TyphoonPoint | null): point is TyphoonPoint {
@@ -488,6 +864,32 @@ function normalizedTimestamp(value: string): string | null {
   return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
 }
 
+function compactTimestamp(value: string): string {
+  const match = value.match(
+    /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})$/,
+  );
+
+  if (!match) {
+    return value;
+  }
+
+  const [, year, month, day, hour, minute] = match;
+  return `${year}-${month}-${day}T${hour}:${minute}:00+08:00`;
+}
+
+function csvWindValue(value: string | undefined): number | null {
+  if (!value || value === "N/A") {
+    return null;
+  }
+
+  if (value.toLowerCase() === "calm") {
+    return 0;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function pointSortValue(point: TyphoonPoint): number {
   if (!point.timestamp) {
     return point.kind === "forecast" ? 2_000_000_000_000 : 1_000_000_000_000;
@@ -660,5 +1062,7 @@ function sampleTyphoon(): TyphoonSystem {
     points,
     latest,
     metrics: buildMetrics(observed, forecast, latest),
+    windForecast: buildWindForecast(latest, forecast),
+    impactRegions: buildImpactRegions(latest, forecast),
   };
 }
