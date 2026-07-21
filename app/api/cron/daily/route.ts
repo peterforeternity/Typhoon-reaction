@@ -11,7 +11,7 @@ export async function GET() {
   return Response.json({
     service: "daily-typhoon-report",
     configured: Boolean(process.env.CRON_SECRET),
-    schedule: "每天 08:00 Asia/Shanghai（Render Cron: 0 0 * * * UTC）",
+    schedule: "每天 08:00 Asia/Shanghai（GitHub Actions）",
   });
 }
 

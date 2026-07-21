@@ -40,14 +40,14 @@ APP_BASE_URL=https://your-service.onrender.com
 
 `RESEND_API_KEY` 与 `ALERT_FROM` 存在时走 Resend；否则如果配置了 `EMAIL_WEBHOOK_URL`，会向该 Webhook 投递邮件负载；都未配置时返回 dry-run 状态。
 
-## Render 每日晨报
+## GitHub Actions 每日晨报
 
 晨报接口为 `POST /api/cron/daily`，必须使用 `Authorization: Bearer <CRON_SECRET>` 调用。接口会读取官方台风列表并发送一封状态邮件；官方数据不可用时不会把演示样本当作真实台风报告。
 
 1. 在现有 Render Web Service 的 Environment 中增加 `CRON_SECRET`，填写一段足够长的随机字符串。
-2. 在 Render Dashboard 选择 **New > Cron Job**，连接同一个 GitHub 仓库和 `main` 分支。
-3. Build Command 填 `npm ci`，Command 填 `npm run alert:daily`。
-4. Schedule 填 `0 0 * * *`。Render 使用 UTC，该表达式对应北京时间每天 08:00。
-5. 为 Cron Job 配置 `APP_BASE_URL=https://你的服务名.onrender.com`，并设置与 Web Service 完全相同的 `CRON_SECRET`。
+2. 打开 GitHub 仓库的 **Settings > Secrets and variables > Actions**，创建 Repository secrets：
+   - `APP_BASE_URL`：现有 Render Web Service 地址，例如 `https://你的服务名.onrender.com`。
+   - `CRON_SECRET`：与 Render Web Service 完全相同的密钥。
+3. 打开仓库的 **Actions > Daily typhoon report**，点击 **Run workflow** 手动验证一次。
 
-创建后可在 Cron Job 页面点击 **Trigger Run** 验证一次。Render Cron Job 按实际运行时间计费，目前每个 Cron Job 每月至少收费 1 美元。
+工作流配置在 `.github/workflows/daily-typhoon-report.yml`，使用 `Asia/Shanghai` 时区，每天 08:00 运行。使用 GitHub Actions 后不需要创建 Render Cron Job。
