@@ -11,7 +11,8 @@
 - 支持按风速、等级、关注点距离和快速增强条件触发预警。
 - 默认风速阈值为 63 km/h（热带风暴级），并支持按业务需要调整。
 - 预警邮件包含级别、预计影响时段、影响区域、触发原因和防御建议。
-- 每天北京时间 08:00 可自动检查台风生成状态并发送晨报；无台风时也会发送确认邮件。
+- 每天北京时间 08:00 自动检查台风生成状态；仅在存在活跃台风时发送晨报。
+- 晨报邮件内嵌台风路径、当前位置和预计影响区域地图。
 - 支持 Resend 邮件发送，也支持自定义 `EMAIL_WEBHOOK_URL`。
 - 官方数据不可达时自动切换到演示样本，便于界面和规则流程验证。
 
@@ -42,7 +43,7 @@ APP_BASE_URL=https://your-service.onrender.com
 
 ## GitHub Actions 每日晨报
 
-晨报接口为 `POST /api/cron/daily`，必须使用 `Authorization: Bearer <CRON_SECRET>` 调用。接口会读取官方台风列表并发送一封状态邮件；官方数据不可用时不会把演示样本当作真实台风报告。
+晨报接口为 `POST /api/cron/daily`，必须使用 `Authorization: Bearer <CRON_SECRET>` 调用。接口会读取官方台风列表，仅在存在活跃台风时发送带地图的邮件；没有台风或官方数据不可用时返回 `skipped`，不会发送邮件，也不会把演示样本当作真实台风报告。
 
 1. 在现有 Render Web Service 的 Environment 中增加 `CRON_SECRET`，填写一段足够长的随机字符串。
 2. 打开 GitHub 仓库的 **Settings > Secrets and variables > Actions**，创建 Repository secrets：

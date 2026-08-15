@@ -3,7 +3,12 @@ import {
   type AlertRules,
   evaluateAlertRules,
   getTyphoonDashboard,
+  type TyphoonSystem,
 } from "@/lib/typhoon";
+import {
+  createTyphoonMapAttachment,
+  TYPHOON_MAP_CONTENT_ID,
+} from "@/lib/typhoon-map";
 
 export const runtime = "edge";
 
@@ -36,7 +41,15 @@ export async function POST(request: Request) {
     });
   }
 
-  const delivery = await deliverAlert(matches, rules, body.dryRun === true);
+  const matchingTyphoons = dashboard.typhoons.filter((typhoon) =>
+    matches.some((match) => match.typhoonId === typhoon.id),
+  );
+  const delivery = await deliverAlert(
+    matches,
+    rules,
+    body.dryRun === true,
+    matchingTyphoons,
+  );
 
   return Response.json({
     status: delivery.status,
@@ -70,6 +83,7 @@ async function deliverAlert(
   matches: AlertMatch[],
   rules: AlertRules,
   dryRun: boolean,
+  typhoons: TyphoonSystem[],
 ): Promise<{
   status: DeliveryStatus;
   message: string;
@@ -110,6 +124,7 @@ async function deliverAlert(
   }
 
   try {
+    const mapAttachment = await createTyphoonMapAttachment(typhoons);
     if (process.env.RESEND_API_KEY && process.env.ALERT_FROM) {
       const response = await fetch("https://api.resend.com/emails", {
         method: "POST",
@@ -123,6 +138,7 @@ async function deliverAlert(
           subject,
           text,
           html,
+          attachments: [mapAttachment],
         }),
       });
 
@@ -139,6 +155,7 @@ async function deliverAlert(
           text,
           html,
           matches,
+          attachments: [mapAttachment],
         }),
       });
 
@@ -194,6 +211,10 @@ function buildEmailHtml(matches: AlertMatch[]): string {
 
   return `<main style="font-family:Arial,'Microsoft YaHei',sans-serif;color:#22313f">
   <h1 style="font-size:22px;color:#0f2f44">台风监测预警</h1>
+  <div style="margin:0 0 18px;border:1px solid #d7e1de;border-radius:8px;overflow:hidden;background:#daeced">
+    <img src="cid:${TYPHOON_MAP_CONTENT_ID}" width="640" alt="台风路径与影响区域地图" style="display:block;width:100%;height:auto;border:0" />
+  </div>
+  <p style="margin:-8px 0 18px;font-size:12px;color:#607080"><span style="color:#1a778a">●</span> 已观测路径　<span style="color:#e08b2b">●</span> 预报路径　<span style="color:#c43531">●</span> 当前中心　<span style="color:#6f4897">○</span> 影响区域</p>
   ${rows}
   <p style="font-size:12px;line-height:1.5;color:#607080">由台风监测与预警平台自动生成。影响区域为风险筛查结果，请以当地气象部门正式预警为准。</p>
 </main>`;

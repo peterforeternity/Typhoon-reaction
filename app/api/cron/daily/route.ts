@@ -1,5 +1,6 @@
 import { createDailyReport } from "@/lib/daily-report";
 import { getTyphoonDashboard } from "@/lib/typhoon";
+import { createTyphoonMapAttachment } from "@/lib/typhoon-map";
 
 export const runtime = "edge";
 
@@ -21,6 +22,26 @@ export async function POST(request: Request) {
   }
 
   const body = (await request.json().catch(() => ({}))) as DailyRequest;
+  const dashboard = await getTyphoonDashboard();
+
+  if (dashboard.source.status !== "live") {
+    return Response.json({
+      status: "skipped",
+      reason: "source_unavailable",
+      message: "官方台风数据暂时不可用，本次停止推送",
+      checkedAt: dashboard.source.fetchedAt,
+    });
+  }
+
+  if (dashboard.typhoons.length === 0) {
+    return Response.json({
+      status: "skipped",
+      reason: "no_active_typhoons",
+      message: "当前没有活跃台风，本次停止推送",
+      checkedAt: dashboard.source.fetchedAt,
+    });
+  }
+
   const recipients = splitRecipients(process.env.ALERT_TO ?? "");
   if (recipients.length === 0) {
     return Response.json(
@@ -29,7 +50,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const dashboard = await getTyphoonDashboard();
   const report = createDailyReport(dashboard);
 
   if (body.dryRun === true) {
@@ -43,11 +63,15 @@ export async function POST(request: Request) {
   }
 
   try {
+    const mapAttachment = await createTyphoonMapAttachment(
+      dashboard.typhoons,
+    );
     const provider = await sendEmail({
       recipients,
       subject: report.subject,
       text: report.text,
       html: report.html,
+      attachments: [mapAttachment],
     });
 
     return Response.json({
@@ -83,6 +107,11 @@ async function sendEmail(input: {
   subject: string;
   text: string;
   html: string;
+  attachments: Array<{
+    content: string;
+    filename: string;
+    content_id: string;
+  }>;
 }): Promise<"Resend" | "Webhook"> {
   if (process.env.RESEND_API_KEY && process.env.ALERT_FROM) {
     const response = await fetch("https://api.resend.com/emails", {
@@ -97,6 +126,7 @@ async function sendEmail(input: {
         subject: input.subject,
         text: input.text,
         html: input.html,
+        attachments: input.attachments,
       }),
     });
 

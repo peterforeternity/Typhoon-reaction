@@ -1,4 +1,5 @@
 import type { TyphoonDashboard, TyphoonSystem } from "@/lib/typhoon";
+import { TYPHOON_MAP_CONTENT_ID } from "@/lib/typhoon-map";
 
 export interface DailyReport {
   subject: string;
@@ -97,6 +98,10 @@ function buildHtml(input: {
       <tr><td style="padding:8px 0;color:#64756f">官方路径数据</td><td style="padding:8px 0;text-align:right;font-weight:700">${input.sourceLive ? "正常" : "暂不可用"}</td></tr>
       <tr><td style="padding:8px 0;color:#64756f">区域最大阵风</td><td style="padding:8px 0;text-align:right;font-weight:700">${escapeHtml(input.windSummary)}</td></tr>
     </table>
+    <div style="margin:0 0 18px;border:1px solid #d9e2df;border-radius:8px;overflow:hidden;background:#daeced">
+      <img src="cid:${TYPHOON_MAP_CONTENT_ID}" width="640" alt="活跃台风路径与影响区域地图" style="display:block;width:100%;height:auto;border:0" />
+    </div>
+    <p style="margin:-8px 0 18px;font-size:12px;color:#64756f"><span style="color:#1a778a">●</span> 已观测路径　<span style="color:#e08b2b">●</span> 预报路径　<span style="color:#c43531">●</span> 当前中心　<span style="color:#6f4897">○</span> 影响区域</p>
     ${systems}
     <p style="margin:20px 0 0;font-size:12px;line-height:1.6;color:#64756f">本邮件由台风监测与预警平台自动生成。影响区域属于辅助筛查结果，请以国家及当地气象部门发布的正式预警为准。</p>
   </div>
